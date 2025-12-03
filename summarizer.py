@@ -13,10 +13,18 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+# Try to load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed, environment variables must be set manually
+    pass
+
 import feedparser
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
-import anthropic
+import google.generativeai as genai
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -56,7 +64,7 @@ class Config:
                 raise
 
         # Override with environment variables (they take precedence)
-        config['anthropic_api_key'] = os.getenv('ANTHROPIC_API_KEY', config.get('anthropic_api_key'))
+        config['gemini_api_key'] = os.getenv('GEMINI_API_KEY', config.get('gemini_api_key'))
         config['youtube_rss_url'] = os.getenv('YOUTUBE_RSS_URL', config.get('youtube_rss_url'))
         config['smtp_host'] = os.getenv('SMTP_HOST', config.get('smtp_host'))
         config['smtp_port'] = int(os.getenv('SMTP_PORT', config.get('smtp_port', 587)))
@@ -65,14 +73,14 @@ class Config:
         config['email_from'] = os.getenv('EMAIL_FROM', config.get('email_from'))
         config['email_to'] = os.getenv('EMAIL_TO', config.get('email_to'))
         config['db_path'] = os.getenv('DB_PATH', config.get('db_path', 'processed_videos.db'))
-        config['claude_model'] = os.getenv('CLAUDE_MODEL', config.get('claude_model', 'claude-3-haiku-20240307'))
+        config['gemini_model'] = os.getenv('GEMINI_MODEL', config.get('gemini_model', 'gemini-1.5-flash'))
 
         return config
 
     def _validate_config(self):
         """Validate that all required configuration values are present."""
         required_keys = [
-            'anthropic_api_key',
+            'gemini_api_key',
             'youtube_rss_url',
             'smtp_host',
             'smtp_port',
@@ -144,15 +152,15 @@ class VideoDatabase:
             logger.error(f"Database query error: {e}")
             return False
 
-    def mark_processed(self, video_id: str, title: str, url: str):
+    def mark_processed(self, video_id: str, title: str, url: str, podcast_id: Optional[int] = None):
         """Mark a video as processed."""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
             cursor.execute(
-                'INSERT INTO processed_videos (video_id, title, url) VALUES (?, ?, ?)',
-                (video_id, title, url)
+                'INSERT INTO processed_videos (video_id, title, url, podcast_id) VALUES (?, ?, ?, ?)',
+                (video_id, title, url, podcast_id)
             )
 
             conn.commit()
@@ -205,12 +213,12 @@ class TranscriptExtractor:
             return None
 
 
-class ClaudeSummarizer:
-    """Generate summaries using Claude AI."""
+class GeminiSummarizer:
+    """Generate summaries using Google Gemini AI."""
 
-    def __init__(self, api_key: str, model: str = 'claude-3-haiku-20240307'):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = model
+    def __init__(self, api_key: str, model: str = 'gemini-1.5-flash'):
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(model)
 
     def generate_summary(self, transcript: str, video_title: str) -> Optional[str]:
         """Generate a concise summary of the video transcript."""
@@ -228,24 +236,13 @@ Transcript:
 {transcript}
 """
 
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            summary = message.content[0].text
+            response = self.model.generate_content(prompt)
+            summary = response.text
             logger.info(f"Successfully generated summary for '{video_title}'")
             return summary
 
-        except anthropic.APIError as e:
-            logger.error(f"Claude API error: {e}")
-            return None
-
         except Exception as e:
-            logger.error(f"Error generating summary: {e}")
+            logger.error(f"Gemini API error: {e}")
             return None
 
 
@@ -329,9 +326,9 @@ class YouTubeSummarizer:
     def __init__(self, config: Config):
         self.config = config
         self.db = VideoDatabase(config.get('db_path'))
-        self.summarizer = ClaudeSummarizer(
-            config.get('anthropic_api_key'),
-            config.get('claude_model')
+        self.summarizer = GeminiSummarizer(
+            config.get('gemini_api_key'),
+            config.get('gemini_model', 'gemini-1.5-flash')
         )
         self.email_sender = EmailSender(
             config.get('smtp_host'),

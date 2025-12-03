@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { getChannelId } = require('./channel_helper');
+const { getPodcastInfo, getApplePodcastRss } = require('./apple_podcast_helper');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -20,13 +22,23 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS podcasts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      channel_id TEXT NOT NULL UNIQUE,
+      channel_id TEXT,
       channel_name TEXT NOT NULL,
-      rss_url TEXT NOT NULL,
+      rss_url TEXT NOT NULL UNIQUE,
+      source TEXT DEFAULT 'youtube',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Migrate existing table: add source column if it doesn't exist
+  db.run(`
+    ALTER TABLE podcasts ADD COLUMN source TEXT DEFAULT 'youtube'
+  `, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Migration warning:', err.message);
+    }
+  });
 
   // User settings table
   db.run(`
@@ -61,6 +73,84 @@ app.get('/api/health', (req, res) => {
 
 // ============== PODCASTS ROUTES ==============
 
+// Unified endpoint: Extract podcast info from URL (YouTube or Apple Podcasts)
+app.post('/api/extract-podcast-info', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+
+  try {
+    // Detect URL type and extract info
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      // YouTube URL
+      const result = await getChannelId(url);
+      if (result.success) {
+        // Generate RSS URL for YouTube
+        const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${result.channelId}`;
+        res.json({
+          success: true,
+          source: 'youtube',
+          channelId: result.channelId,
+          rssUrl: rssUrl
+        });
+      } else {
+        res.json(result);
+      }
+    } else if (url.includes('podcasts.apple.com')) {
+      // Apple Podcasts URL
+      const result = await getApplePodcastRss(url);
+      if (result.success) {
+        res.json({
+          success: true,
+          source: 'apple_podcasts',
+          rssUrl: result.feedUrl,
+          podcastName: result.podcastName,
+          artist: result.artist,
+          artwork: result.artwork
+        });
+      } else {
+        res.json(result);
+      }
+    } else {
+      res.json({
+        success: false,
+        error: 'Unsupported URL format',
+        suggestion: 'Please provide a YouTube channel URL or Apple Podcasts URL'
+      });
+    }
+  } catch (error) {
+    console.error('Error extracting podcast info:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to extract podcast info',
+      details: error.message
+    });
+  }
+});
+
+// Legacy endpoint: Extract channel ID from YouTube URL (backward compatibility)
+app.post('/api/extract-channel-id', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL is required' });
+  }
+
+  try {
+    const result = await getChannelId(url);
+    res.json(result);
+  } catch (error) {
+    console.error('Error extracting channel ID:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to extract channel ID',
+      details: error.message
+    });
+  }
+});
+
 // Get all podcasts
 app.get('/api/podcasts', (req, res) => {
   db.all('SELECT * FROM podcasts ORDER BY created_at DESC', (err, rows) => {
@@ -89,20 +179,23 @@ app.get('/api/podcasts/:id', (req, res) => {
 
 // Add new podcast
 app.post('/api/podcasts', (req, res) => {
-  const { channel_id, channel_name, rss_url } = req.body;
+  const { channel_id, channel_name, rss_url, source } = req.body;
 
-  if (!channel_id || !channel_name || !rss_url) {
+  // channel_id is optional for Apple Podcasts
+  if (!channel_name || !rss_url) {
     return res.status(400).json({
-      error: 'Missing required fields: channel_id, channel_name, rss_url'
+      error: 'Missing required fields: channel_name, rss_url'
     });
   }
 
+  const podcastSource = source || 'youtube';
+
   const stmt = db.prepare(`
-    INSERT INTO podcasts (channel_id, channel_name, rss_url)
-    VALUES (?, ?, ?)
+    INSERT INTO podcasts (channel_id, channel_name, rss_url, source)
+    VALUES (?, ?, ?, ?)
   `);
 
-  stmt.run(channel_id, channel_name, rss_url, function(err) {
+  stmt.run(channel_id || null, channel_name, rss_url, podcastSource, function(err) {
     if (err) {
       console.error('Error adding podcast:', err);
       if (err.message.includes('UNIQUE')) {
@@ -116,6 +209,7 @@ app.post('/api/podcasts', (req, res) => {
       channel_id,
       channel_name,
       rss_url,
+      source: podcastSource,
       message: 'Podcast added successfully'
     });
   });

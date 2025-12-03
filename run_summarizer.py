@@ -10,10 +10,17 @@ import sqlite3
 import logging
 from typing import List, Dict, Optional
 
+# Load .env file FIRST before importing anything else
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Import the original summarizer components
 from summarizer import (
     TranscriptExtractor,
-    ClaudeSummarizer,
+    GeminiSummarizer,
     EmailSender,
     VideoDatabase,
     Config
@@ -87,12 +94,45 @@ class DatabaseConfig:
             return []
 
 
+class MinimalConfig:
+    """Minimal configuration that only requires API key (email comes from database)."""
+
+    def __init__(self):
+        import json
+
+        config = {}
+
+        # Try to load from config.json if it exists
+        if os.path.exists('config.json'):
+            try:
+                with open('config.json', 'r') as f:
+                    config = json.load(f)
+            except:
+                pass
+
+        # Override with environment variables
+        self.gemini_api_key = os.getenv('GEMINI_API_KEY', config.get('gemini_api_key'))
+        self.gemini_model = os.getenv('GEMINI_MODEL', config.get('gemini_model', 'gemini-1.5-flash'))
+        self.smtp_host = os.getenv('SMTP_HOST', config.get('smtp_host', 'smtp.gmail.com'))
+        self.smtp_port = int(os.getenv('SMTP_PORT', config.get('smtp_port', 587)))
+        self.smtp_username = os.getenv('SMTP_USERNAME', config.get('smtp_username', ''))
+        self.smtp_password = os.getenv('SMTP_PASSWORD', config.get('smtp_password', ''))
+        self.email_from = os.getenv('EMAIL_FROM', config.get('email_from', ''))
+
+        # Validate only the essential keys
+        if not self.gemini_api_key:
+            raise ValueError("Missing GEMINI_API_KEY. Please set it in .env or config.json")
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 class IntegratedSummarizer:
     """Main orchestrator that integrates with the web app database."""
 
     def __init__(self):
-        # Load configuration
-        self.base_config = Config()  # Still loads API keys from env/config.json
+        # Load configuration (only requires API key, not email)
+        self.base_config = MinimalConfig()
         self.db_config = DatabaseConfig()
         self.db_config.load_from_db()
 
@@ -109,9 +149,9 @@ class IntegratedSummarizer:
             logger.warning("No podcasts configured. Please add podcasts in the web interface.")
 
         # Initialize components
-        self.summarizer = ClaudeSummarizer(
-            self.base_config.get('anthropic_api_key'),
-            self.base_config.get('claude_model')
+        self.summarizer = GeminiSummarizer(
+            self.base_config.get('gemini_api_key'),
+            self.base_config.get('gemini_model', 'gemini-1.5-flash')
         )
 
         self.email_sender = EmailSender(
@@ -151,6 +191,26 @@ class IntegratedSummarizer:
         logger.info(f"Summary: Processed {total_processed} videos, {total_errors} errors")
         logger.info("=" * 60)
 
+    def _is_podcast_new(self, podcast_id: int) -> bool:
+        """Check if this podcast has any processed videos yet."""
+        try:
+            conn = sqlite3.connect('podcasts.db')
+            cursor = conn.cursor()
+
+            cursor.execute(
+                'SELECT COUNT(*) FROM processed_videos WHERE podcast_id = ?',
+                (podcast_id,)
+            )
+
+            count = cursor.fetchone()[0]
+            conn.close()
+
+            return count == 0
+
+        except sqlite3.Error as e:
+            logger.error(f"Database error checking podcast status: {e}")
+            return False
+
     def _process_podcast(self, podcast: Dict) -> Dict:
         """Process a single podcast's RSS feed."""
         import feedparser
@@ -168,8 +228,31 @@ class IntegratedSummarizer:
 
             logger.info(f"Found {len(feed.entries)} entries")
 
+            # Check if this is a newly added podcast
+            is_new_podcast = self._is_podcast_new(podcast['id'])
+
+            if is_new_podcast and len(feed.entries) > 0:
+                logger.info(f"🎉 New podcast detected! Will process latest episode as welcome summary")
+                # Find the first full video (skip Shorts) for new podcasts
+                entries_to_process = []
+                for entry in feed.entries:
+                    video_url = entry.get('link', '')
+                    # Skip YouTube Shorts (they usually don't have transcripts)
+                    if '/shorts/' not in video_url:
+                        entries_to_process = [entry]
+                        logger.info(f"Found first full video (skipping Shorts)")
+                        break
+
+                # If all entries are Shorts, just try the first one anyway
+                if not entries_to_process and len(feed.entries) > 0:
+                    entries_to_process = [feed.entries[0]]
+                    logger.warning("All entries appear to be Shorts, will try the latest anyway")
+            else:
+                # Process all entries for existing podcasts (checks for new ones)
+                entries_to_process = feed.entries
+
             # Process each entry
-            for entry in feed.entries:
+            for entry in entries_to_process:
                 try:
                     video_title = entry.get('title', 'Unknown Title')
                     video_url = entry.get('link', '')
@@ -198,7 +281,7 @@ class IntegratedSummarizer:
                     if not transcript:
                         logger.warning(f"No transcript available: {video_title}")
                         # Mark as processed to avoid repeated attempts
-                        self.video_db.mark_processed(video_id, video_title, video_url)
+                        self.video_db.mark_processed(video_id, video_title, video_url, podcast['id'])
                         error_count += 1
                         continue
 
@@ -224,7 +307,7 @@ class IntegratedSummarizer:
                         continue
 
                     # Mark as processed
-                    self.video_db.mark_processed(video_id, video_title, video_url)
+                    self.video_db.mark_processed(video_id, video_title, video_url, podcast['id'])
                     processed_count += 1
 
                     logger.info(f"✓ Successfully processed: {video_title}")

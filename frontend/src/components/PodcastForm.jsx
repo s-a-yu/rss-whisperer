@@ -1,14 +1,20 @@
 import { useState } from 'react';
 import './PodcastForm.css';
 
+const API_URL = 'http://localhost:3001/api';
+
 function PodcastForm({ onSubmit }) {
   const [formData, setFormData] = useState({
     channel_id: '',
     channel_name: '',
     rss_url: '',
+    source: '', // 'youtube' or 'apple_podcasts'
   });
+  const [podcastUrl, setPodcastUrl] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+  const [detectedSource, setDetectedSource] = useState(''); // Show user what type was detected
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -33,11 +39,69 @@ function PodcastForm({ onSubmit }) {
     setError('');
   };
 
+  const handleUrlExtract = async () => {
+    if (!podcastUrl.trim()) {
+      setError('Please enter a podcast URL');
+      return;
+    }
+
+    setExtracting(true);
+    setError('');
+    setDetectedSource('');
+
+    try {
+      const response = await fetch(`${API_URL}/extract-podcast-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: podcastUrl }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        if (result.source === 'youtube') {
+          // YouTube podcast
+          setFormData((prev) => ({
+            ...prev,
+            channel_id: result.channelId,
+            rss_url: result.rssUrl,
+            source: 'youtube',
+          }));
+          setDetectedSource('YouTube');
+        } else if (result.source === 'apple_podcasts') {
+          // Apple Podcasts
+          setFormData((prev) => ({
+            ...prev,
+            channel_id: '', // Apple Podcasts don't have channel IDs
+            channel_name: result.podcastName || prev.channel_name,
+            rss_url: result.rssUrl,
+            source: 'apple_podcasts',
+          }));
+          setDetectedSource('Apple Podcasts');
+        }
+        setError('');
+      } else {
+        setError(result.error || 'Failed to extract podcast info');
+      }
+    } catch (err) {
+      setError('Network error: Could not extract podcast info');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!formData.channel_id || !formData.channel_name) {
-      setError('Please fill in all fields');
+    // For Apple Podcasts, channel_id can be empty
+    if (!formData.channel_name || !formData.rss_url) {
+      setError('Please fill in all required fields');
+      return;
+    }
+
+    // For YouTube, channel_id is required
+    if (formData.source === 'youtube' && !formData.channel_id) {
+      setError('Please provide a YouTube channel ID');
       return;
     }
 
@@ -54,7 +118,10 @@ function PodcastForm({ onSubmit }) {
         channel_id: '',
         channel_name: '',
         rss_url: '',
+        source: '',
       });
+      setPodcastUrl('');
+      setDetectedSource('');
     } else {
       setError(result.error || 'Failed to add podcast');
     }
@@ -76,20 +143,48 @@ function PodcastForm({ onSubmit }) {
       </div>
 
       <div className="form-group">
-        <label htmlFor="channel_id">YouTube Channel ID *</label>
-        <input
-          type="text"
-          id="channel_id"
-          name="channel_id"
-          value={formData.channel_id}
-          onChange={handleChannelIdChange}
-          placeholder="e.g., UCxxxxxxxxxxxxxx"
-          required
-        />
+        <label htmlFor="podcast_url">Podcast URL (YouTube or Apple Podcasts)</label>
+        <div className="url-extract-container">
+          <input
+            type="text"
+            id="podcast_url"
+            name="podcast_url"
+            value={podcastUrl}
+            onChange={(e) => setPodcastUrl(e.target.value)}
+            placeholder="e.g., https://www.youtube.com/@channelname or https://podcasts.apple.com/us/podcast/..."
+          />
+          <button
+            type="button"
+            className="extract-button"
+            onClick={handleUrlExtract}
+            disabled={extracting || !podcastUrl.trim()}
+          >
+            {extracting ? 'Extracting...' : 'Extract Info'}
+          </button>
+        </div>
         <small className="help-text">
-          Find the channel ID in the page source or channel URL
+          Paste YouTube channel URL or Apple Podcasts URL and click Extract
+          {detectedSource && <span style={{ color: '#667eea', fontWeight: 'bold' }}> ✓ Detected: {detectedSource}</span>}
         </small>
       </div>
+
+      {formData.source === 'youtube' && (
+        <div className="form-group">
+          <label htmlFor="channel_id">YouTube Channel ID</label>
+          <input
+            type="text"
+            id="channel_id"
+            name="channel_id"
+            value={formData.channel_id}
+            onChange={handleChannelIdChange}
+            placeholder="e.g., UCxxxxxxxxxxxxxx"
+            readOnly={detectedSource === 'YouTube'}
+          />
+          <small className="help-text">
+            Auto-filled from URL above
+          </small>
+        </div>
+      )}
 
       <div className="form-group">
         <label htmlFor="rss_url">RSS Feed URL</label>
