@@ -1,0 +1,8 @@
+#!/bin/bash
+# Convenience script to run the summarizer with the correct Python version and model
+
+# Set the correct Gemini model
+export GEMINI_MODEL=gemini-2.5-flash
+
+# Run with Python 3.11 (where packages are installed)
+python3.11 run_summarizer.py "$@"

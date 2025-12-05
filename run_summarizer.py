@@ -72,7 +72,7 @@ class DatabaseConfig:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            cursor.execute('SELECT id, channel_id, channel_name, rss_url FROM podcasts')
+            cursor.execute('SELECT id, channel_id, channel_name, rss_url, source FROM podcasts')
             rows = cursor.fetchall()
 
             podcasts = [
@@ -80,7 +80,8 @@ class DatabaseConfig:
                     'id': row[0],
                     'channel_id': row[1],
                     'channel_name': row[2],
-                    'rss_url': row[3]
+                    'rss_url': row[3],
+                    'source': row[4] if len(row) > 4 else 'youtube'
                 }
                 for row in rows
             ]
@@ -112,7 +113,7 @@ class MinimalConfig:
 
         # Override with environment variables
         self.gemini_api_key = os.getenv('GEMINI_API_KEY', config.get('gemini_api_key'))
-        self.gemini_model = os.getenv('GEMINI_MODEL', config.get('gemini_model', 'gemini-1.5-flash'))
+        self.gemini_model = os.getenv('GEMINI_MODEL', config.get('gemini_model', 'gemini-2.5-flash'))
         self.smtp_host = os.getenv('SMTP_HOST', config.get('smtp_host', 'smtp.gmail.com'))
         self.smtp_port = int(os.getenv('SMTP_PORT', config.get('smtp_port', 587)))
         self.smtp_username = os.getenv('SMTP_USERNAME', config.get('smtp_username', ''))
@@ -151,7 +152,7 @@ class IntegratedSummarizer:
         # Initialize components
         self.summarizer = GeminiSummarizer(
             self.base_config.get('gemini_api_key'),
-            self.base_config.get('gemini_model', 'gemini-1.5-flash')
+            self.base_config.get('gemini_model', 'gemini-2.5-flash')
         )
 
         self.email_sender = EmailSender(
@@ -233,20 +234,27 @@ class IntegratedSummarizer:
 
             if is_new_podcast and len(feed.entries) > 0:
                 logger.info(f"🎉 New podcast detected! Will process latest episode as welcome summary")
-                # Find the first full video (skip Shorts) for new podcasts
-                entries_to_process = []
-                for entry in feed.entries:
-                    video_url = entry.get('link', '')
-                    # Skip YouTube Shorts (they usually don't have transcripts)
-                    if '/shorts/' not in video_url:
-                        entries_to_process = [entry]
-                        logger.info(f"Found first full video (skipping Shorts)")
-                        break
 
-                # If all entries are Shorts, just try the first one anyway
-                if not entries_to_process and len(feed.entries) > 0:
+                # For YouTube, skip Shorts; for others, just use first entry
+                if podcast.get('source') == 'youtube':
+                    # Find the first full video (skip Shorts) for new YouTube podcasts
+                    entries_to_process = []
+                    for entry in feed.entries:
+                        video_url = entry.get('link', '')
+                        # Skip YouTube Shorts (they usually don't have transcripts)
+                        if '/shorts/' not in video_url:
+                            entries_to_process = [entry]
+                            logger.info(f"Found first full YouTube video (skipping Shorts)")
+                            break
+
+                    # If all entries are Shorts, just try the first one anyway
+                    if not entries_to_process and len(feed.entries) > 0:
+                        entries_to_process = [feed.entries[0]]
+                        logger.warning("All entries appear to be Shorts, will try the latest anyway")
+                else:
+                    # For non-YouTube podcasts, just use the first episode
                     entries_to_process = [feed.entries[0]]
-                    logger.warning("All entries appear to be Shorts, will try the latest anyway")
+                    logger.info(f"Using latest episode for new podcast")
             else:
                 # Process all entries for existing podcasts (checks for new ones)
                 entries_to_process = feed.entries
@@ -256,30 +264,42 @@ class IntegratedSummarizer:
                 try:
                     video_title = entry.get('title', 'Unknown Title')
                     video_url = entry.get('link', '')
+                    podcast_source = podcast.get('source', 'youtube')
 
-                    # Extract video ID
-                    video_id = TranscriptExtractor.extract_video_id(video_url)
+                    # Handle different podcast sources
+                    if podcast_source == 'youtube':
+                        # Extract video ID for YouTube
+                        video_id = TranscriptExtractor.extract_video_id(video_url)
 
-                    if not video_id and hasattr(entry, 'yt_videoid'):
-                        video_id = entry.yt_videoid
+                        if not video_id and hasattr(entry, 'yt_videoid'):
+                            video_id = entry.yt_videoid
 
-                    if not video_id:
-                        logger.warning(f"Could not extract video ID from: {video_url}")
-                        error_count += 1
-                        continue
+                        if not video_id:
+                            logger.warning(f"Could not extract video ID from: {video_url}")
+                            error_count += 1
+                            continue
+                    else:
+                        # For Apple Podcasts and others, use the episode URL as ID
+                        video_id = entry.get('id', video_url)
 
                     # Check if already processed
                     if self.video_db.is_processed(video_id):
                         logger.info(f"Skipping already processed: {video_title}")
                         continue
 
-                    logger.info(f"New video: {video_title} ({video_id})")
+                    logger.info(f"New episode: {video_title} ({video_id[:50]}...)")
 
-                    # Extract transcript
-                    transcript = TranscriptExtractor.get_transcript(video_id)
+                    # Extract transcript/content based on source
+                    if podcast_source == 'youtube':
+                        transcript = TranscriptExtractor.get_transcript(video_id)
+                    else:
+                        # For Apple Podcasts, use the episode description/summary
+                        transcript = entry.get('summary', '')
+                        if not transcript and hasattr(entry, 'content'):
+                            transcript = entry.content[0].value if entry.content else ''
 
                     if not transcript:
-                        logger.warning(f"No transcript available: {video_title}")
+                        logger.warning(f"No transcript/content available: {video_title}")
                         # Mark as processed to avoid repeated attempts
                         self.video_db.mark_processed(video_id, video_title, video_url, podcast['id'])
                         error_count += 1
@@ -293,6 +313,16 @@ class IntegratedSummarizer:
                         error_count += 1
                         continue
 
+                    # Print summary to terminal
+                    print("\n" + "="*80)
+                    print(f"📝 SUMMARY: {video_title}")
+                    print("="*80)
+                    print(f"🔗 URL: {video_url}")
+                    print(f"📺 Podcast: {podcast['channel_name']}")
+                    print("-"*80)
+                    print(summary)
+                    print("="*80 + "\n")
+
                     # Send email
                     email_sent = self.email_sender.send_summary(
                         self.email_to,
@@ -302,11 +332,9 @@ class IntegratedSummarizer:
                     )
 
                     if not email_sent:
-                        logger.error(f"Failed to send email: {video_title}")
-                        error_count += 1
-                        continue
+                        logger.warning(f"Email failed, but summary generated (see above)")
 
-                    # Mark as processed
+                    # Mark as processed (even if email failed, since we have the summary)
                     self.video_db.mark_processed(video_id, video_title, video_url, podcast['id'])
                     processed_count += 1
 
