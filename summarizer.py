@@ -229,8 +229,12 @@ Format your summary as:
 - A brief overview (2-3 sentences)
 - Key points covered (bullet points)
 - Main takeaways (bullet points)
+- Technologies discussed
+- Talking points
 
-Keep the summary suitable for an email digest - clear, scannable, and informative.
+Prepare this as notes that allow the reader to stay up to date with the AI/technology landscape and be able to talk about it
+including interesting points brought up
+
 
 Transcript:
 {transcript}
