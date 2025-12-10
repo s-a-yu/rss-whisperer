@@ -226,11 +226,11 @@ class GeminiSummarizer:
             prompt = f"""Please analyze the following video transcript from "{video_title}" and create a concise summary.
 
 Format your summary as:
-- A brief overview (2-3 sentences)
+- A brief overview (1-2 sentences)
 - Key points covered (bullet points)
 - Main takeaways (bullet points)
-- Technologies discussed
-- Talking points
+- Technologies discussed (bullet points)
+- Talking points (bullet points)
 
 Prepare this as notes that allow the reader to stay up to date with the AI/technology landscape and be able to talk about it
 including interesting points brought up
