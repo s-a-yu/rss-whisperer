@@ -235,7 +235,6 @@ Format your summary as:
 Prepare this as notes that allow the reader to stay up to date with the AI/technology landscape and be able to talk about it
 including interesting points brought up
 
-
 Transcript:
 {transcript}
 """
