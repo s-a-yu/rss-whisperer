@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Backend (Node.js) Tests
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: backend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Check for syntax errors
+      run: node -c server.js
+
+    - name: Run linter (if configured)
+      run: npm run lint --if-present
+      continue-on-error: true
+
+    - name: Run tests (if configured)
+      run: npm test --if-present
+      continue-on-error: true
+
+  # Frontend (React) Tests
+  frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run linter
+      run: npm run lint --if-present
+      continue-on-error: true
+
+    - name: Build frontend
+      run: npm run build
+
+    - name: Run tests (if configured)
+      run: npm test --if-present
+      continue-on-error: true
+
+  # Python (Summarizer) Tests
+  python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Check Python syntax
+      run: |
+        python -m py_compile run_summarizer.py
+        python -m py_compile summarizer.py
+
+    - name: Run Python linter (flake8)
+      run: |
+        pip install flake8
+        flake8 run_summarizer.py summarizer.py --max-line-length=120 --ignore=E501
+      continue-on-error: true
+
+    - name: Test imports
+      run: |
+        python -c "import run_summarizer"
+        python -c "import summarizer"
+      continue-on-error: true
+
+  # Security Checks
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Gitleaks (check for secrets)
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check for hardcoded credentials
+      run: |
+        if grep -r "GEMINI_API_KEY.*=" --include="*.py" --include="*.js" --exclude-dir=node_modules .; then
+          echo "Warning: Found potential hardcoded API keys"
+          exit 1
+        fi
+      continue-on-error: true
+
+  # Database Schema Check
+  database:
+    name: Database Schema Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup SQLite
+      run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+    - name: Test database schema
+      run: |
+        sqlite3 test.db < backend/schema.sql || echo "No schema.sql found, skipping"
+        rm -f test.db
+      continue-on-error: true

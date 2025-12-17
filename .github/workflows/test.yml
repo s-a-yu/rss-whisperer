@@ -1,0 +1,63 @@
+name: Test Workflow
+
+# Simple test workflow to verify GitHub Actions is working
+# This runs quickly and helps debug setup issues
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Quick Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check project structure
+      run: |
+        echo "=== Project Structure ==="
+        ls -la
+        echo ""
+        echo "=== Backend Files ==="
+        ls -la backend/ || echo "No backend directory"
+        echo ""
+        echo "=== Frontend Files ==="
+        ls -la frontend/ || echo "No frontend directory"
+        echo ""
+        echo "=== Python Files ==="
+        ls -la *.py || echo "No Python files"
+
+    - name: Check for sensitive files
+      run: |
+        echo "=== Checking .gitignore ==="
+        if [ -f .gitignore ]; then
+          cat .gitignore
+        else
+          echo "WARNING: No .gitignore found!"
+        fi
+        echo ""
+        echo "=== Checking for .env (should NOT exist in repo) ==="
+        if [ -f .env ]; then
+          echo "ERROR: .env file found in repository!"
+          exit 1
+        else
+          echo "✅ No .env file in repo (good!)"
+        fi
+
+    - name: Verify requirements.txt
+      run: |
+        echo "=== Python dependencies ==="
+        if [ -f requirements.txt ]; then
+          cat requirements.txt
+        else
+          echo "WARNING: No requirements.txt found!"
+        fi
+
+    - name: Test complete
+      run: |
+        echo "✅ All checks passed!"
+        echo "🎉 Your GitHub Actions setup is working!"

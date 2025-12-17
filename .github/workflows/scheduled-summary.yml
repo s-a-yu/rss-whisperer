@@ -1,0 +1,68 @@
+name: Scheduled Summary Generation
+
+# This workflow runs the summarizer automatically on a schedule
+# Useful if you want to run it in the cloud instead of locally
+
+on:
+  # Run every day at 9 AM UTC
+  schedule:
+    - cron: '0 9 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  generate-summaries:
+    name: Generate Podcast Summaries
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Download database from artifact (if exists)
+      uses: actions/download-artifact@v4
+      with:
+        name: podcasts-db
+        path: .
+      continue-on-error: true
+
+    - name: Create .env file from secrets
+      run: |
+        cat << EOF > .env
+        GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+        SMTP_HOST=${{ secrets.SMTP_HOST }}
+        SMTP_PORT=${{ secrets.SMTP_PORT }}
+        SMTP_USERNAME=${{ secrets.SMTP_USERNAME }}
+        SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+        EMAIL_FROM=${{ secrets.EMAIL_FROM }}
+        EMAIL_TO=${{ secrets.EMAIL_TO }}
+        GEMINI_MODEL=gemini-2.5-flash
+        EOF
+
+    - name: Run summarizer
+      run: python3.11 run_summarizer.py
+      continue-on-error: true
+
+    - name: Upload database artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: podcasts-db
+        path: |
+          podcasts.db
+          processed_videos.db
+        retention-days: 90
+
+    - name: Cleanup secrets
+      if: always()
+      run: rm -f .env
