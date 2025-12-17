@@ -9,6 +9,8 @@ import sys
 import sqlite3
 import logging
 from typing import List, Dict, Optional
+from datetime import datetime, timedelta
+import time
 
 # Load .env file FIRST before importing anything else
 try:
@@ -72,7 +74,7 @@ class DatabaseConfig:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            cursor.execute('SELECT id, channel_id, channel_name, rss_url, source FROM podcasts')
+            cursor.execute('SELECT id, channel_id, channel_name, rss_url, source, frequency_days FROM podcasts')
             rows = cursor.fetchall()
 
             podcasts = [
@@ -81,7 +83,8 @@ class DatabaseConfig:
                     'channel_id': row[1],
                     'channel_name': row[2],
                     'rss_url': row[3],
-                    'source': row[4] if len(row) > 4 else 'youtube'
+                    'source': row[4] if len(row) > 4 else 'youtube',
+                    'frequency_days': row[5] if len(row) > 5 else 7
                 }
                 for row in rows
             ]
@@ -258,6 +261,28 @@ class IntegratedSummarizer:
             else:
                 # Process all entries for existing podcasts (checks for new ones)
                 entries_to_process = feed.entries
+
+            # Filter entries by frequency (date-based filtering)
+            frequency_days = podcast.get('frequency_days', 7)
+            cutoff_date = datetime.now() - timedelta(days=frequency_days)
+
+            filtered_entries = []
+            for entry in entries_to_process:
+                # Get published date from entry
+                published_date = None
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    published_date = datetime(*entry.published_parsed[:6])
+                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                    published_date = datetime(*entry.updated_parsed[:6])
+
+                # If we can't get the date, include it (for new podcasts)
+                if published_date is None or published_date >= cutoff_date:
+                    filtered_entries.append(entry)
+                else:
+                    logger.debug(f"Skipping old episode (published {published_date.strftime('%Y-%m-%d')}): {entry.get('title', 'Unknown')}")
+
+            entries_to_process = filtered_entries
+            logger.info(f"After date filtering ({frequency_days} days): {len(entries_to_process)} episodes to process")
 
             # Process each entry
             for entry in entries_to_process:

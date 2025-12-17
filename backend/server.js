@@ -179,7 +179,7 @@ app.get('/api/podcasts/:id', (req, res) => {
 
 // Add new podcast
 app.post('/api/podcasts', (req, res) => {
-  const { channel_id, channel_name, rss_url, source } = req.body;
+  const { channel_id, channel_name, rss_url, source, frequency_days } = req.body;
 
   // channel_id is optional for Apple Podcasts
   if (!channel_name || !rss_url) {
@@ -189,13 +189,14 @@ app.post('/api/podcasts', (req, res) => {
   }
 
   const podcastSource = source || 'youtube';
+  const frequencyDays = frequency_days || 7; // Default to 7 days
 
   const stmt = db.prepare(`
-    INSERT INTO podcasts (channel_id, channel_name, rss_url, source)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO podcasts (channel_id, channel_name, rss_url, source, frequency_days)
+    VALUES (?, ?, ?, ?, ?)
   `);
 
-  stmt.run(channel_id || null, channel_name, rss_url, podcastSource, function(err) {
+  stmt.run(channel_id || null, channel_name, rss_url, podcastSource, frequencyDays, function(err) {
     if (err) {
       console.error('Error adding podcast:', err);
       if (err.message.includes('UNIQUE')) {

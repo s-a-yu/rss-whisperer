@@ -8,7 +8,8 @@ function PodcastForm({ onSubmit }) {
     channel_id: '',
     channel_name: '',
     rss_url: '',
-    source: '', // 'youtube' or 'apple_podcasts'
+    source: '', 
+    frequency_days: 7,
   });
   const [podcastUrl, setPodcastUrl] = useState('');
   const [error, setError] = useState('');
@@ -119,6 +120,7 @@ function PodcastForm({ onSubmit }) {
         channel_name: '',
         rss_url: '',
         source: '',
+        frequency_days: 7,
       });
       setPodcastUrl('');
       setDetectedSource('');
@@ -198,6 +200,25 @@ function PodcastForm({ onSubmit }) {
         />
         <small className="help-text">
           This is automatically generated from the Channel ID
+        </small>
+      </div>
+
+      <div className="form-group">
+        <label htmlFor="frequency_days">Summary Frequency</label>
+        <select
+          id="frequency_days"
+          name="frequency_days"
+          value={formData.frequency_days}
+          onChange={handleChange}
+        >
+          <option value={1}>Daily (episodes from last 1 day)</option>
+          <option value={3}>Every 3 days (episodes from last 3 days)</option>
+          <option value={7}>Weekly (episodes from last 7 days)</option>
+          <option value={14}>Bi-weekly (episodes from last 14 days)</option>
+          <option value={30}>Monthly (episodes from last 30 days)</option>
+        </select>
+        <small className="help-text">
+          Only episodes published within this timeframe will be summarized
         </small>
       </div>
 
