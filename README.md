@@ -1,7 +1,5 @@
 # RSS Whisperer - Multi-Platform Podcast Summarizer
 
-[![CI](https://github.com/YOUR_USERNAME/rss-whisperer/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/rss-whisperer/actions/workflows/ci.yml)
-
 Automatically monitor podcasts from YouTube and Apple Podcasts, extract transcripts/content, generate AI-powered summaries using Google Gemini, and receive email digests. Features a modern web UI for easy podcast management.
 
 ## ✨ Features
